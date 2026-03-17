@@ -1,4 +1,5 @@
 from statistics import linear_regression, correlation
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 def check_suitable_regression(dataframe, min_var=10, n_col_crit=5):
     '''
@@ -44,144 +45,117 @@ def bivariate_regression(x, y):
 
     return results
 
+# ----------------------------
+# Gaussian Elimination
+# ----------------------------
+# Improvements in this implementation:
+# - Forward elimination uses list comprehensions for clarity.
+# - Back substitution is simplified using sum + zip.
+# - Makes a copy of the input matrix to avoid modifying the original.
+# - Raises a clear error if the matrix is singular.
+# - Docstring clearly explains purpose and output.
+
 def gaussian_elimination(A, b):
-    '''
-    Gaussian Elimination
-    --------------------
-    Solves a system of linear equations.
-    '''
-
+    """
+    Solves a system of linear equations Ax = b using Gaussian elimination.
+    Returns the solution vector x.
+    """
     n = len(A)
+    # Make a copy to avoid modifying the original
+    M = [row[:] + [b_val] for row, b_val in zip(A, b)]
 
+    # Forward elimination
     for i in range(n):
-        A[i].append(b[i])
-
-    for i in range(n):
-
-        pivot = A[i][i]
-
+        pivot = M[i][i]
         if pivot == 0:
             raise ValueError("Singular matrix")
-
-        for j in range(i, n + 1):
-            A[i][j] /= pivot
-
+        M[i] = [elem / pivot for elem in M[i]]  # normalize pivot row
         for k in range(i + 1, n):
-            factor = A[k][i]
+            factor = M[k][i]
+            M[k] = [M[k][j] - factor * M[i][j] for j in range(n + 1)]
 
-            for j in range(i, n + 1):
-                A[k][j] -= factor * A[i][j]
-
+    # Back substitution
     x = [0] * n
-
     for i in range(n - 1, -1, -1):
-
-        x[i] = A[i][n]
-
-        for j in range(i + 1, n):
-            x[i] -= A[i][j] * x[j]
+        x[i] = M[i][-1] - sum(M[i][j] * x[j] for j in range(i + 1, n))
 
     return x
 
+# ----------------------------
+# Multivariate Regression
+# ----------------------------
+# Improvements in this implementation:
+# - Covariance calculation is more readable.
+# - Avoids modifying input lists directly (safer).
+# - Predicted values are computed using a clean list comprehension.
+# - Docstrings are more descriptive, explaining inputs and outputs.
+# - Works seamlessly with gaussian_elimination() to calculate regression coefficients.
+# - R-squared calculation included for model evaluation.
+
 def multivariate_regression(multi_x, y):
-    '''
-    Multivariate Regression
-    -----------------------
-    Calculates regression coefficients for multiple predictors.
-    '''
-
-    k = len(multi_x)
-    n = len(multi_x[0])
-
+    """
+    Performs multivariate regression with multiple predictors.
+    Returns a dictionary with:
+        - 'constant': intercept
+        - 'gradients': list of coefficients for predictors
+        - 'det_coeff': R-squared
+    """
+    k = len(multi_x)          # number of predictors
+    n = len(multi_x[0])       # number of observations
     y_bar = sum(y) / n
 
-    x_bars = []
-    cov_matrix = [[0] * k for _ in range(k)]
+    # Means of predictors
+    x_bars = [sum(x) / n for x in multi_x]
 
-    for i in range(k):
+    # Covariance matrix
+    cov_matrix = [
+        [
+            sum((multi_x[i][m] - x_bars[i]) * (multi_x[j][m] - x_bars[j]) for m in range(n)) / n
+            for j in range(k)
+        ]
+        for i in range(k)
+    ]
 
-        x_bar = sum(multi_x[i]) / n
-        x_bars.append(x_bar)
+    # Constant terms
+    const_list = [
+        sum((multi_x[i][m] - x_bars[i]) * (y[m] - y_bar) for m in range(n)) / n
+        for i in range(k)
+    ]
 
-        for j in range(i, k):
+    # Solve for coefficients
+    coeffs = gaussian_elimination(cov_matrix, const_list)
 
-            x_bar_j = sum(multi_x[j]) / n
+    # Intercept
+    b0 = y_bar - sum(c * xb for c, xb in zip(coeffs, x_bars))
 
-            cov = sum(
-                (multi_x[i][m] - x_bar) *
-                (multi_x[j][m] - x_bar_j)
-                for m in range(n)
-            ) / n
+    # Predicted values
+    y_hat = [b0 + sum(coeffs[j] * multi_x[j][i] for j in range(k)) for i in range(n)]
 
-            cov_matrix[i][j] = cov
-            cov_matrix[j][i] = cov
-
-    coeff_matrix = []
-    const_list = []
-
-    for i in range(k):
-
-        row = []
-
-        for j in range(k):
-            row.append(cov_matrix[j][i])
-
-        coeff_matrix.append(row)
-
-        const = sum(
-            (multi_x[i][m] - x_bars[i]) *
-            (y[m] - y_bar)
-            for m in range(n)
-        ) / n
-
-        const_list.append(const)
-
-    coeffs = gaussian_elimination(coeff_matrix, const_list)
-
-    b0 = y_bar - sum(coeffs[i] * x_bars[i] for i in range(k))
-
-    y_hat = []
-
-    for i in range(n):
-
-        prediction = b0
-
-        for j in range(k):
-            prediction += coeffs[j] * multi_x[j][i]
-
-        y_hat.append(prediction)
-
+    # R-squared
     SS_t = sum((y_i - y_bar) ** 2 for y_i in y)
-
     SS_r = sum((y[i] - y_hat[i]) ** 2 for i in range(n))
-
     r2 = 1 - SS_r / SS_t
 
-    results = {
+    return {
         'constant': b0,
         'gradients': coeffs,
         'det_coeff': r2
     }
 
-    return results
-
 def calculate_vif(dataframe):
-    '''
+    """
     Variance Inflation Factor
     -------------------------
     Detects multicollinearity between independent variables.
-    '''
-
+    Returns a list of dicts with variable names and VIF values.
+    """
+    
     X = dataframe.select_dtypes(include='number')
+    vif_list = []
 
-    vif_data = pd.DataFrame()
+    for i, col in enumerate(X.columns):
+        vif_value = variance_inflation_factor(X.values, i)
+        vif_list.append({'variable': col, 'VIF': vif_value})
 
-    vif_data["variable"] = X.columns
-
-    vif_data["VIF"] = [
-        variance_inflation_factor(X.values, i)
-        for i in range(len(X.columns))
-    ]
-
-    return vif_data
+    return vif_list
 
